@@ -9,6 +9,7 @@ build_info = true
 extra_output = ["storageLayout"]
 gas_reports = ["*"]
 experimental = ["delegation"]
+offline = true
 
 solc_version = '0.8.28'
 optimizer = true
@@ -23,4 +24,3 @@ remappings = [
 [rpc_endpoints]
 goatMainnet = "https://rpc.goat.network"
 goatTestnet = "https://rpc.testnet3.goat.network"
-

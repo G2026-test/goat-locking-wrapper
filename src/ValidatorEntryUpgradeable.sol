@@ -30,6 +30,8 @@ contract ValidatorEntryUpgradeable is
 {
     uint256 public constant MAX_COMMISSION_RATE = 10000; // 100%
     uint256 public constant MAX_VALIDATOR_COUNT = 200;
+    /// @notice The cooldown period after a validator is migrated before it can be migrated again.
+    uint32 public constant MIGRATION_COOLDOWN = 7 days;
 
     ILocking public underlying;
     IERC20 public rewardToken;
@@ -38,9 +40,10 @@ contract ValidatorEntryUpgradeable is
 
     event ValidatorMigrated(
         address validator,
-        address incentivePool,
+        address funder,
         address funderPayee,
-        address funder
+        address operator,
+        address incentivePool
     );
 
     event CommissionRatesUpdated(
@@ -54,13 +57,16 @@ contract ValidatorEntryUpgradeable is
 
     event ValidatorFunderPayeeUpdated(address validator, address funderPayee);
     event ValidatorOperatorUpdated(address validator, address operator);
+    event MigrationRegistered(address validator, address owner);
 
     struct ValidatorInfo {
-        address payable incentivePool;
-        address funderPayee;
+        bool active;
+        uint32 index;
+        uint32 migrationCooldown;
         address funder;
+        address funderPayee;
         address operator;
-        uint256 index;
+        address payable incentivePool;
     }
 
     address public foundation;
@@ -77,54 +83,54 @@ contract ValidatorEntryUpgradeable is
     }
 
     /// @notice Initializes the upgradeable storage.
-    /// @param _underlying Goat locking contract that owns validators.
-    /// @param _rewardToken ERC20 token paid from incentive pools.
-    /// @param _foundation Foundation commission recipient.
+    /// @param underlyingContract Goat locking contract that owns validators.
+    /// @param rewardTokenContract ERC20 token paid from incentive pools.
+    /// @param foundationAddr Foundation commission recipient.
     /// @param initialOwner Owner of the proxy (defaults to caller if zero).
     function initialize(
-        ILocking _underlying,
-        IERC20 _rewardToken,
-        address _foundation,
+        ILocking underlyingContract,
+        IERC20 rewardTokenContract,
+        address foundationAddr,
         address initialOwner
     ) external initializer {
         require(
-            address(_underlying) != address(0),
+            address(underlyingContract) != address(0),
             "Invalid underlying address"
         );
         require(
-            address(_rewardToken) != address(0),
+            address(rewardTokenContract) != address(0),
             "Invalid rewardToken address"
         );
-        require(_foundation != address(0), "Invalid foundation address");
+        require(foundationAddr != address(0), "Invalid foundation address");
 
         __Ownable_init(
             initialOwner == address(0) ? _msgSender() : initialOwner
         );
 
-        underlying = _underlying;
-        rewardToken = _rewardToken;
-        foundation = _foundation;
+        underlying = underlyingContract;
+        rewardToken = rewardTokenContract;
+        foundation = foundationAddr;
     }
 
-    /// @notice Updates the foundation payee and withdraws pending commissions.
+    /// @notice Updates the foundation payee.
     /// @param newFoundation Replacement foundation address.
-    function setFoundation(address newFoundation) external onlyOwner {
+    /// @param to Destination wallet.
+    function setFoundation(
+        address newFoundation,
+        address to
+    ) external onlyOwner {
         require(newFoundation != address(0), "Invalid foundation address");
-        address oldFoundation = foundation;
-        require(oldFoundation != newFoundation, "Foundation unchanged");
+        require(foundation != newFoundation, "Foundation unchanged");
 
-        if (oldFoundation != address(0)) {
+        if (to != address(0)) {
             for (uint256 i; i < validatorList.length; i++) {
-                address validator = validatorList[i];
-                address payable pool = validators[validator].incentivePool;
+                address payable pool = validators[validatorList[i]]
+                    .incentivePool;
                 if (pool != address(0)) {
-                    IncentivePool(pool).withdrawFoundationCommission(
-                        oldFoundation
-                    );
+                    IncentivePool(pool).withdrawFoundationCommission(to);
                 }
             }
         }
-
         foundation = newFoundation;
         emit FoundationUpdated(newFoundation);
     }
@@ -140,22 +146,6 @@ contract ValidatorEntryUpgradeable is
         uint256 newFoundationGoatRate,
         uint256 newOperatorGoatRate
     ) external onlyOwner {
-        require(
-            newFoundationNativeRate <= MAX_COMMISSION_RATE,
-            "Invalid foundation native"
-        );
-        require(
-            newOperatorNativeRate <= MAX_COMMISSION_RATE,
-            "Invalid operator native"
-        );
-        require(
-            newFoundationGoatRate <= MAX_COMMISSION_RATE,
-            "Invalid foundation goat"
-        );
-        require(
-            newOperatorGoatRate <= MAX_COMMISSION_RATE,
-            "Invalid operator goat"
-        );
         require(
             newFoundationNativeRate + newOperatorNativeRate <=
                 MAX_COMMISSION_RATE,
@@ -179,6 +169,16 @@ contract ValidatorEntryUpgradeable is
         );
     }
 
+    /// @notice Registers a migration intent for a validator.
+    /// @param validator Validator being migrated.
+    function registerMigration(address validator) external {
+        ValidatorInfo storage info = validators[validator];
+        require(!info.active, "Already migrated");
+        require(msg.sender == underlying.owners(validator), "Not the owner");
+        info.funder = msg.sender;
+        emit MigrationRegistered(validator, msg.sender);
+    }
+
     /// @notice Deploys a dedicated incentive pool for the validator.
     /// @param validator Validator address being migrated.
     /// @param operator Operator receiving commissions.
@@ -189,19 +189,21 @@ contract ValidatorEntryUpgradeable is
     /// @param allowanceUpdatePeriod Duration of allowance windows.
     function migrate(
         address validator,
-        address operator,
-        address funderPayee,
         address funder,
+        address funderPayee,
+        address operator,
         uint256 operatorNativeAllowance,
         uint256 operatorTokenAllowance,
         uint256 allowanceUpdatePeriod
     ) external {
+        ValidatorInfo storage info = validators[validator];
+        require(!info.active, "Already migrated");
         require(address(this) == underlying.owners(validator), "Not the owner");
+        require(msg.sender == info.funder, "Not registered");
         require(
-            address(validators[validator].incentivePool) == address(0),
-            "Already migrated"
+            block.timestamp >= info.migrationCooldown,
+            "Migration window not expired"
         );
-        require(foundation != address(0), "Foundation not set");
         require(operator != address(0), "Invalid operator payee");
         require(funderPayee != address(0), "Invalid funder payee address");
         require(funder != address(0), "Invalid funder address");
@@ -221,20 +223,23 @@ contract ValidatorEntryUpgradeable is
             )
         );
         validators[validator] = ValidatorInfo({
-            incentivePool: pool,
-            funderPayee: funderPayee,
+            active: true,
+            index: uint32(validatorList.length),
+            migrationCooldown: 0,
             funder: funder,
+            funderPayee: funderPayee,
             operator: operator,
-            index: validatorList.length
+            incentivePool: pool
         });
 
         validatorList.push(validator);
 
         emit ValidatorMigrated(
             validator,
-            validators[validator].incentivePool,
+            funder,
             funderPayee,
-            funder
+            operator,
+            validators[validator].incentivePool
         );
     }
 
@@ -243,28 +248,15 @@ contract ValidatorEntryUpgradeable is
     /// @param newOwner Target contract that should become validator owner.
     function migrateTo(address validator, address newOwner) external {
         ValidatorInfo storage info = validators[validator];
+        require(info.active, "Not migrated");
         require(msg.sender == info.funder, "Not the funder");
 
-        IncentivePool(info.incentivePool).distributeReward(
-            info.funderPayee,
-            foundation,
-            info.operator,
-            foundationNativeCommissionRate,
-            foundationGoatCommissionRate,
-            operatorNativeCommissionRate,
-            operatorGoatCommissionRate
-        );
-
-        IncentivePool(info.incentivePool).withdrawFoundationCommission(
-            foundation
-        );
-        IncentivePool(info.incentivePool).withdrawOperatorCommission(
-            info.operator
-        );
-
+        _distributeReward(info);
+        underlying.claim(validator, info.incentivePool);
         underlying.changeValidatorOwner(validator, newOwner);
         _removeValidator(validator, info.index);
-        delete validators[validator];
+        info.active = false;
+        info.migrationCooldown = uint32(block.timestamp + MIGRATION_COOLDOWN);
     }
 
     /// @notice Updates the funder payee address.
@@ -283,16 +275,20 @@ contract ValidatorEntryUpgradeable is
     /// @notice Rotates the validator operator.
     /// @param validator Target validator.
     /// @param operator New operator payee.
-    function setOperator(address validator, address operator) external {
+    /// @param to Destination wallet.
+    function setOperator(
+        address validator,
+        address operator,
+        address to
+    ) external {
         ValidatorInfo storage info = validators[validator];
         require(info.incentivePool != address(0), "Not migrated");
         require(msg.sender == info.operator, "Not operator");
         require(operator != address(0), "Invalid operator address");
         require(info.operator != operator, "Operator unchanged");
-
-        IncentivePool(info.incentivePool).withdrawOperatorCommission(
-            info.operator
-        );
+        if (to != address(0)) {
+            IncentivePool(info.incentivePool).withdrawOperatorCommission(to);
+        }
         info.operator = operator;
 
         emit ValidatorOperatorUpdated(validator, operator);
@@ -432,8 +428,6 @@ contract ValidatorEntryUpgradeable is
     /// @dev Pushes rewards plus commissions to the relevant parties.
     /// @param info Validator metadata referencing the incentive pool.
     function _distributeReward(ValidatorInfo storage info) internal {
-        require(foundation != address(0), "Foundation not set");
-
         IncentivePool(info.incentivePool).distributeReward(
             info.funderPayee,
             foundation,
@@ -455,7 +449,7 @@ contract ValidatorEntryUpgradeable is
         if (index != lastIndex) {
             address lastValidator = validatorList[lastIndex];
             validatorList[index] = lastValidator;
-            validators[lastValidator].index = index;
+            validators[lastValidator].index = uint32(index);
         }
 
         validatorList.pop();
@@ -465,5 +459,5 @@ contract ValidatorEntryUpgradeable is
         address newImplementation
     ) internal override onlyOwner {}
 
-    uint256[49] private __gap;
+    uint256[50] private __gap;
 }
