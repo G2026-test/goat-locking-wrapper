@@ -1,5 +1,7 @@
 node_modules
 .env
+.env.testnet3
+.env.mainnet
 .vscode
 
 # formatter

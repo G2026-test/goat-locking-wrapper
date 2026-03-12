@@ -73,6 +73,50 @@ GOAT Locking Wrapper Contract is a validator staking management system that serv
 └────────┘ └──────┘ └────────┘ └──────┘ └────────┘ └──────┘
 ```
 
+## Deployment
+
+Create an environment file with:
+
+- `PRIVATE_KEY`
+- `LOCKING_ADDR`
+- `REWARD_TOKEN_ADDR`
+- `FOUNDATION_ADDR`
+- `OWNER_ADDR` (optional, defaults to deployer)
+
+### GOAT Testnet3
+
+```bash
+set -a
+source .env.testnet3
+set +a
+forge script script/Deploy.s.sol \
+  --rpc-url goatTestnet \
+  --broadcast \
+  --priority-gas-price 130000 \
+  --with-gas-price 130007 \
+  --verify \
+  --verifier blockscout \
+  --verifier-url https://explorer.testnet3.goat.network/api/
+```
+
+### GOAT Mainnet
+
+```bash
+set -a
+source .env.mainnet
+set +a
+forge script script/Deploy.s.sol \
+  --rpc-url goatMainnet \
+  --broadcast \
+  --priority-gas-price 130000 \
+  --with-gas-price 130007 \
+  --verify \
+  --verifier blockscout \
+  --verifier-url https://explorer.goat.network/api/
+```
+
+Blockscout verification does not require an API key with the commands above.
+
 # Sequencer Pool Integration Guide
 
 ## Deployed Contracts
@@ -119,9 +163,9 @@ function migrateValidator(
     locking.changeValidatorOwner(validator, address(lockingDelegate));
     lockingDelegate.migrate(
         validator,
-        operator,
-        distributor,
         address(this),
+        distributor,
+        operator,
         operatorNativeAllowance,
         operatorTokenAllowance,
         allowanceUpdatePeriod
