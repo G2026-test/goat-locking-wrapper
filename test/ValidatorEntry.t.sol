@@ -219,6 +219,22 @@ contract ValidatorEntryUpgradeableTest is Test {
         assertTrue(poolAddr != initialPool);
     }
 
+    function testMigrateToRejectsZeroAddressOwner() public {
+        _migrateDefault(0, 0, 0);
+
+        vm.prank(FUNDER);
+        vm.expectRevert("Invalid zero address owner");
+        entry.migrateTo(VALIDATOR, address(0));
+    }
+
+    function testMigrateToRejectsEntryAsNewOwner() public {
+        _migrateDefault(0, 0, 0);
+
+        vm.prank(FUNDER);
+        vm.expectRevert("Invalid self owner");
+        entry.migrateTo(VALIDATOR, address(entry));
+    }
+
     function testDelegateAndUndelegateForwardThroughEntry() public {
         _migrateDefault(0, 0, 0);
 

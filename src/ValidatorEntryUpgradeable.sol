@@ -250,6 +250,8 @@ contract ValidatorEntryUpgradeable is
         ValidatorInfo storage info = validators[validator];
         require(info.active, "Not migrated");
         require(msg.sender == info.funder, "Not the funder");
+        require(newOwner != address(0), "Invalid zero address owner");
+        require(newOwner != address(this), "Invalid self owner");
 
         _distributeReward(info);
         underlying.claim(validator, info.incentivePool);

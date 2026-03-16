@@ -9,7 +9,7 @@ build_info = true
 extra_output = ["storageLayout"]
 gas_reports = ["*"]
 experimental = ["delegation"]
-offline = true
+offline = false
 
 solc_version = '0.8.28'
 optimizer = true

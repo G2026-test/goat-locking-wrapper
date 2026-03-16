@@ -117,6 +117,44 @@ forge script script/Deploy.s.sol \
 
 Blockscout verification does not require an API key with the commands above.
 
+### Upgrade (UUPS Proxy)
+
+Only the proxy owner can upgrade the implementation. Set `PROXY_ADDR` to the deployed proxy address.
+
+#### GOAT Testnet3
+
+```bash
+set -a
+source .env.testnet3
+set +a
+PROXY_ADDR=0xc3288ebdb16c9f2376f85d5fd1aa20ad0cd7cbee \
+forge script script/Upgrade.s.sol \
+  --rpc-url goatTestnet \
+  --broadcast \
+  --priority-gas-price 130000 \
+  --with-gas-price 130007 \
+  --verify \
+  --verifier blockscout \
+  --verifier-url https://explorer.testnet3.goat.network/api/
+```
+
+#### GOAT Mainnet
+
+```bash
+set -a
+source .env.mainnet
+set +a
+PROXY_ADDR=<PROXY_ADDRESS> \
+forge script script/Upgrade.s.sol \
+  --rpc-url goatMainnet \
+  --broadcast \
+  --priority-gas-price 130000 \
+  --with-gas-price 130007 \
+  --verify \
+  --verifier blockscout \
+  --verifier-url https://explorer.goat.network/api/
+```
+
 # Sequencer Pool Integration Guide
 
 ## Deployed Contracts
